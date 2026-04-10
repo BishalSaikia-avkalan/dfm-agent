@@ -15,6 +15,19 @@ An agentic AI application that takes a raw 3D geometry file as input and returns
 - **Model Showcase**: An interactive dashboard highlighting training metrics across multiple deep learning architectures (DiffusionNet, GAT, MeshCNN, PointNet++).
 - **Report Export**: Generate PDF DFM reports for your geometry.
 
+## Preview
+
+<img width="600" height="400" alt="image" src="https://github.com/user-attachments/assets/ed0c6658-4b08-489f-82b2-61a9338f74da" />
+
+
+
+<img width="600" height="400" alt="image" src="https://github.com/user-attachments/assets/9c932674-59ff-4542-b4aa-0ecad6c077fe" />
+
+
+<img width="600" height="400" alt="image" src="https://github.com/user-attachments/assets/9cedf6fe-7637-4baa-9bbb-017d3e7468d7" />
+
+
+
 ## Tech Stack
 
 - **Frontend**: Streamlit
