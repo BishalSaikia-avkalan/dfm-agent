@@ -9,3 +9,5 @@ plotly
 openai
 python-dotenv
 fpdf2
+pandas
+torch_geometric

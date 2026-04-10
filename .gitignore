@@ -36,11 +36,9 @@ wheels/
 *.pt
 *.pth
 data/
-GAT/
-MeshCNN/
-PointNet++/
-DiffusionNet/
+comparative*.ipynb
 
 # System files
 .DS_Store
 Thumbs.db
+

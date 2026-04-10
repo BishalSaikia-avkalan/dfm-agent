@@ -4,19 +4,23 @@ An agentic AI application that takes a raw 3D geometry file as input and returns
 
 ## Features
 
-- **File Upload**: Accept STL, OBJ, or OFF files via drag-and-drop.
+- **File Upload**: Accept STL files via drag-and-drop.
 - **3D Viewer**: Interactive in-browser rendering of the uploaded geometry.
-- **Metric Prediction**: Automated analysis of overhang angles, support volume, surface area, and build volume.
+- **Metric Prediction**: Automated analysis of overhang angles, support volume, surface area, and build volume through Geometric Deep Learning.
 - **Orientation Optimization**: Compute and visualize the optimal build direction to minimize support material.
-- **Conversational Agent**: LLM-powered chat interface for follow-up questions and design suggestions.
+- **Autonomous DFM Agent**: An LLM-powered assistant capable of acting on the geometry:
+  - Automatically **healing** broken meshes using `trimesh.repair`.
+  - Instantly **estimating manufacturing costs** relative to material choice.
+  - Generating optimized **slicer settings** (infill %, supports) based on prediction constraints.
+- **Model Showcase**: An interactive dashboard highlighting training metrics across multiple deep learning architectures (DiffusionNet, GAT, MeshCNN, PointNet++).
 - **Report Export**: Generate PDF DFM reports for your geometry.
 
 ## Tech Stack
 
 - **Frontend**: Streamlit
-- **Backend**: FastAPI / Python
-- **LLM**: Claude API (Anthropic) for conversational reasoning
-- **Geometry**: Trimesh, PyTorch (for metric prediction models)
+- **Backend Model**: Custom DiffusionNet PyTorch model
+- **LLM**: OpenAI API (GPT-4o) with Function Calling capabilities
+- **Geometry Processing**: Trimesh, `robust-laplacian`
 
 ## Getting Started
 

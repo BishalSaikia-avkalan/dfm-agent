@@ -8,14 +8,16 @@ and chat with an AI agent for design-for-manufacturing advice.
 import os
 import sys
 import tempfile
+import textwrap
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
+import pandas as pd
 
 # Ensure project root is on the path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from inference.predict import run_inference
+from inference.predict import run_inference, run_comparative_inference
 from agent.dfm_agent import DFMAgent
 from reports.pdf_generator import generate_report
 
@@ -26,28 +28,152 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Custom CSS for a polished look ───────────────────────────────────────────
+# ── Premium Theme CSS ────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main .block-container { padding-top: 1.5rem; }
-    .metric-card {
-        background: linear-gradient(135deg, #1a1f2e 0%, #0e1117 100%);
-        border: 1px solid #2980b9;
-        border-radius: 12px;
-        padding: 1rem 1.2rem;
-        margin-bottom: 0.6rem;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
+
+    /* ---- Global Styling ---- */
+    html, body, .stApp {
+        font-family: 'Inter', sans-serif !important;
+        background-color: #ffffff !important;
     }
-    .metric-label { color: #8e99a4; font-size: 0.85rem; }
-    .metric-value { color: #e0e0e0; font-size: 1.3rem; font-weight: 600; }
+    
+    h1, h2, h3, h4 {
+        font-family: 'Outfit', sans-serif !important;
+        color: #1e293b !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* ---- Sidebar ---- */
+    section[data-testid="stSidebar"] {
+        background-color: #f8fafc !important;
+        border-right: 1px solid #e2e8f0;
+    }
+
+    /* ---- Metric cards ---- */
+    .metric-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1.25rem;
+        box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+        margin-bottom: 1rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    }
+    .metric-label { 
+        color: #64748b; 
+        font-size: 0.75rem; 
+        font-weight: 600; 
+        text-transform: uppercase; 
+        letter-spacing: 0.05em; 
+    }
+    .metric-value { 
+        color: #0f172a; 
+        font-size: 1.5rem; 
+        font-weight: 700; 
+        margin-top: 4px;
+        font-family: 'Outfit', sans-serif;
+    }
+
+    /* ---- Pass / Fail badges ---- */
     .pass-badge {
-        background: #27ae60; color: white; padding: 2px 10px;
-        border-radius: 8px; font-weight: 600; font-size: 0.85rem;
+        background: #dcfce7; color: #166534; padding: 4px 12px;
+        border-radius: 9999px; font-weight: 600; font-size: 0.75rem;
+        border: 1px solid #bbf7d0;
     }
     .fail-badge {
-        background: #e74c3c; color: white; padding: 2px 10px;
-        border-radius: 8px; font-weight: 600; font-size: 0.85rem;
+        background: #fee2e2; color: #991b1b; padding: 4px 12px;
+        border-radius: 9999px; font-weight: 600; font-size: 0.75rem;
+        border: 1px solid #fecaca;
     }
-    .stChatMessage { border-radius: 12px; }
+
+    /* ---- Constraint list ---- */
+    .constraint-panel {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    }
+    .constraint-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 10px 0; border-bottom: 1px solid #f1f5f9;
+    }
+    .constraint-row:last-child { border-bottom: none; }
+    .constraint-name { color: #334155; font-size: 0.9rem; font-weight: 500; }
+    .constraint-conf { color: #94a3b8; font-size: 0.75rem; margin-left: 8px; font-family: 'JetBrains Mono', monospace; }
+
+    /* ---- Comparative Table (Premium Light Theme) ---- */
+    .comp-table-container {
+        border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden;
+        margin-top: 1.5rem; background: #ffffff; padding: 0px;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    }
+    .dfm-table {
+        border-collapse: collapse; width: 100%; font-size: 0.82rem;
+        background-color: #ffffff; color: #1e293b; font-family: 'JetBrains Mono', monospace;
+    }
+    .dfm-table th {
+        padding: 14px 12px; text-align: center; font-weight: 700; 
+        font-family: 'Outfit', sans-serif; text-transform: uppercase; letter-spacing: 0.02em;
+        border-bottom: 2px solid #e2e8f0;
+    }
+    .dfm-table td {
+        padding: 12px; text-align: center; border-bottom: 1px solid #f1f5f9;
+        color: #475569;
+    }
+    .dfm-table tr:hover td { background: #f8fafc; }
+    .dfm-table td:first-child { 
+        text-align: left; color: #1e293b; font-family: 'Inter', sans-serif; 
+        font-weight: 600; padding-left: 20px; background: #f8fafc;
+    }
+    
+    .th-metric { background-color: #f1f5f9; color: #475569 !important; }
+    .th-gat    { background-color: #dbeafe; color: #1e40af !important; }
+    .th-pnpp   { background-color: #f1f5f9; color: #475569 !important; }
+    .th-mcnn   { background-color: #fef3c7; color: #92400e !important; }
+    .th-dn     { background-color: #ccfbf1; color: #115e59 !important; }
+
+    .val-pass  { color: #166534; font-weight: 700; }
+    .val-fail  { color: #991b1b; font-weight: 700; }
+    .best-highlight { color: #0d9488 !important; background: #f0fdfa; font-weight: 800; }
+    .efficient-highlight { color: #1d4ed8 !important; background: #eff6ff; font-weight: 800; }
+
+    /* ---- Summary cards (Matching Light Theme) ---- */
+    .summary-card {
+        background: #ffffff; border: 1px solid #e2e8f0;
+        border-radius: 12px; padding: 1.25rem; text-align: center;
+        box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+    }
+    .sc-label { font-size: 0.7rem; color: #64748b; margin-bottom: 6px; text-transform: uppercase; font-weight: 700; }
+    .sc-model { font-size: 1.1rem; font-weight: 800; color: #ffffff; margin-bottom: 4px; font-family: 'Outfit', sans-serif; }
+    .sc-value { font-size: 0.8rem; color: #94a3b8; font-family: 'JetBrains Mono', monospace; }
+    
+    /* Model specific accents */
+    .sc-dn { border-color: #0d9488 !important; border-width: 2px; }
+    .sc-dn .sc-model { color: #0d9488; }
+    .sc-gat { border-color: #2563eb !important; border-width: 2px; }
+    .sc-gat .sc-model { color: #2563eb; }
+
+    /* ---- Tabs ---- */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        height: 48px; border-radius: 8px 8px 0 0; 
+        background-color: #f1f5f9; border: 1px solid #e2e8f0;
+        padding: 0 24px; font-weight: 600; color: #475569;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff !important; border-bottom: 2px solid #2563eb !important;
+        color: #2563eb !important;
+    }
+
+    /* ---- Chat ---- */
+    .stChatMessage { border: 1px solid #e2e8f0; background: #ffffff; border-radius: 12px; padding: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -76,15 +202,15 @@ def render_3d_mesh(mesh, intensity=None):
     """Return a Plotly figure for the trimesh object."""
     vertices = mesh.vertices
     faces = mesh.faces
-    
+
     mesh_args = dict(
         x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
         i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
         flatshading=True,
-        lighting=dict(ambient=0.4, diffuse=0.6, specular=0.3, roughness=0.5),
+        lighting=dict(ambient=0.45, diffuse=0.65, specular=0.3, roughness=0.5),
         lightposition=dict(x=100, y=200, z=300),
     )
-    
+
     if intensity is not None:
         mesh_args.update(dict(
             intensity=intensity,
@@ -92,29 +218,26 @@ def render_3d_mesh(mesh, intensity=None):
             colorscale='Jet',
             cmin=0, cmax=1,
             showscale=True,
-            colorbar=dict(title=dict(text='GradCAM', side='right'), thickness=14, len=0.45, x=1.01)
+            colorbar=dict(title=dict(text='Saliency', side='right'), thickness=14, len=0.45, x=1.01)
         ))
     else:
-        mesh_args.update(dict(color='cyan', opacity=0.60))
+        mesh_args.update(dict(color='#3b82f6', opacity=0.75))
 
     fig = go.Figure(data=[go.Mesh3d(**mesh_args)])
-    
     fig.update_layout(
         scene=dict(
             xaxis=dict(visible=False),
             yaxis=dict(visible=False),
             zaxis=dict(visible=False),
-            bgcolor="#0e1117",
+            bgcolor="rgba(0,0,0,0)",
             aspectmode="data",
         ),
-        paper_bgcolor="#0e1117",
+        paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=0, t=0, b=0),
-        height=420,
+        height=450,
     )
     return fig
 
-
-import textwrap
 
 def metric_card(label, value):
     return textwrap.dedent(f"""
@@ -125,36 +248,100 @@ def metric_card(label, value):
     """)
 
 
-def constraint_badge(name, info):
+def constraint_row(name, info):
     badge_cls = "pass-badge" if info["passed"] else "fail-badge"
     status = "PASS" if info["passed"] else "FAIL"
     return textwrap.dedent(f"""
-    <div style="display:flex; justify-content:space-between; align-items:center;
-                padding:6px 0; border-bottom:1px solid #1a1f2e;">
-        <span style="color:#e0e0e0;">{name.replace('_',' ').title()}</span>
+    <div class="constraint-row">
+        <span class="constraint-name">{name.replace('_',' ').title()}</span>
         <span>
             <span class="{badge_cls}">{status}</span>
-            <span style="color:#8e99a4; font-size:0.8rem; margin-left:8px;">
-                {info['confidence']:.0f}%
-            </span>
+            <span class="constraint-conf">{info['confidence']:.0f}%</span>
         </span>
     </div>
     """)
 
 
-# ── Sidebar: Upload & Analyse ───────────────────────────────────────────────
+
+def render_comp_dashboard():
+    """Static HTML table for architecture comparison based on notebook benchmarks."""
+    models = ["GAT", "PointNet++", "MeshCNN", "DiffusionNet"]
+    
+    data = {
+        "Volume R² ↑":      ["0.2057", "-0.0418", "0.4329", "0.4474"],
+        "Volume MSE ↓":     ["3.2192", "4.2224", "2.2983", "2.2395"],
+        "Area Accuracy":   ["77.7%", "77.7%", "77.7%", "77.7%"],
+        "Contour Count":   ["60.7%", "60.7%", "60.7%", "60.7%"],
+        "Contour Length":  ["83.1%", "83.1%", "83.1%", "83.1%"],
+        "Overhang":        ["69.6%", "69.6%", "69.6%", "69.6%"],
+        "Pass Fail ↑":     ["30.1%", "30.1%", "30.1%", "69.9%"],
+        "Parameters":      ["45,766", "516,038", "~200k", "284,550"],
+        "Epochs Trained":  ["21", "30", "60", "60"]
+    }
+
+    th_html = "<th class='th-metric' style='text-align:left; padding-left:20px;'>Metric</th>"
+    for m in models:
+        th_cls = "th-" + ("pnpp" if m == "PointNet++" else m.lower())
+        th_html += f"<th class='{th_cls}'>{m}</th>"
+
+    rows_html = ""
+    for metric, values in data.items():
+        row = f"<td>{metric}</td>"
+        for i, val in enumerate(values):
+            cell_cls = ""
+            # Highlighting logic based on the photo
+            if metric in ["Volume R² ↑", "Volume MSE ↓", "Pass Fail ↑"] and i == 3: # DiffusionNet wins
+                cell_cls = "best-highlight"
+            if metric == "Parameters" and i == 0: # GAT is most efficient
+                cell_cls = "efficient-highlight"
+            
+            row += f"<td class='{cell_cls}'>{val}</td>"
+        rows_html += f"<tr>{row}</tr>"
+
+    html = f"""
+    <div class="comp-table-container">
+        <table class="dfm-table">
+            <thead><tr>{th_html}</tr></thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ── Benchmark Data (Static) ──────────────────────────────────────────────────
+BENCHMARKS = [
+    {"label": "Best R² (Volume)",  "model": "DiffusionNet", "value": "0.4474", "cls": "sc-dn"},
+    {"label": "Lowest Volume MSE", "model": "DiffusionNet", "value": "2.2395", "cls": "sc-dn"},
+    {"label": "Most Efficient",    "model": "GAT",          "value": "45,766 params", "cls": "sc-gat"},
+    {"label": "Pass/Fail F1 Score","model": "DiffusionNet", "value": "69.9% Overall", "cls": "sc-dn"},
+]
+
+def render_summary_cards():
+    cols = st.columns(len(BENCHMARKS))
+    for i, b in enumerate(BENCHMARKS):
+        with cols[i]:
+            st.markdown(f"""
+            <div class="summary-card {b['cls']}">
+                <div class="sc-label">{b['label']}</div>
+                <div class="sc-model">{b['model']}</div>
+                <div class="sc-value" style="color:#64748b; font-weight:700;">{b['value']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+# ── Sidebar: Control Panel ───────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🏭 DFM Analyzer")
-    st.markdown("Upload an **STL** file to analyse its manufacturability for FDM 3D printing.")
+    st.markdown("## 🏭 DFM Control Panel")
+    st.markdown("Upload STL file for **Agentic DFM Analysis**.")
     st.divider()
 
-    uploaded = st.file_uploader("Upload STL file", type=["stl"], key="stl_upload")
+    uploaded = st.file_uploader("Upload STL", type=["stl"], label_visibility="collapsed")
 
-    if uploaded is not None:
-        if st.button("🔍 Analyse Part", use_container_width=True, type="primary"):
-            with st.spinner("Processing mesh & running DiffusionNet…  \n*(this may take ~1 min for Laplacian computation)*"):
+    if uploaded:
+        if st.button("🚀 Run Analysis", width="stretch", type="primary"):
+            with st.spinner("Processing Mesh..."):
                 try:
-                    # Save to temp file for trimesh
                     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
                         tmp.write(uploaded.getvalue())
                         tmp_path = tmp.name
@@ -162,156 +349,193 @@ with st.sidebar:
                     result = run_inference(tmp_path)
                     st.session_state.analysis = result
                     st.session_state.file_name = uploaded.name
-                    st.session_state.messages = []  # reset chat for new file
+                    st.session_state.messages = []
                     os.unlink(tmp_path)
-                    st.success("✅ Analysis complete!")
+                    st.success("Part Analyzed Successfully!")
                 except Exception as e:
-                    st.error(f"Analysis failed: {e}")
+                    st.error(f"Analysis Failed: {e}")
 
-    # Report download
-    if st.session_state.analysis is not None:
+    if st.session_state.analysis:
         st.divider()
+        st.markdown("### 📄 Reports")
         pdf_bytes = generate_report(st.session_state.analysis, st.session_state.file_name or "part")
         st.download_button(
-            "📄 Download PDF Report",
+            "Download PDF Report",
             data=pdf_bytes,
-            file_name="dfm_report.pdf",
+            file_name=f"DFM_Report_{st.session_state.file_name}.pdf",
             mime="application/pdf",
-            use_container_width=True,
+            width="stretch",
         )
 
 
-# ── Main area ────────────────────────────────────────────────────────────────
-st.markdown("# 🏭 Agentic DFM Analyzer")
-st.markdown("*AI-powered Design for Manufacturability analysis for FDM 3D printing*")
+# ── Main Header ──────────────────────────────────────────────────────────────
+st.markdown("<h1 style='margin-bottom: 0px;'>Agentic DFM Analyzer</h1>", unsafe_allow_html=True)
+st.markdown("<p style='color: #64748b; font-size: 1.1rem; margin-bottom: 24px;'>Intelligence-driven manufacturability for additive manufacturing</p>", unsafe_allow_html=True)
 
-if st.session_state.analysis is None:
-    st.info("👈 Upload an STL file in the sidebar and click **Analyse Part** to get started.")
-else:
-    result = st.session_state.analysis
-    mesh_info = result["mesh_info"]
-    constraints = result["constraints"]
+if not st.session_state.analysis:
+    st.info("👋 Welcome! Please upload an STL file in the sidebar to begin your manufacturing audit.")
 
-    # ── Two-column layout: 3D viewer + metrics ───────────────────────────
-    col_3d, col_metrics = st.columns([3, 2], gap="large")
+# Handle Agent Commands (Mesh Repair)
+if "agent_commands" in st.session_state and st.session_state.analysis:
+    for cmd in st.session_state.agent_commands:
+        if cmd == "repair_mesh":
+            mesh = st.session_state.analysis["raw_mesh"]
+            if not mesh.is_watertight:
+                import trimesh
+                st.toast("🔧 Agent is repairing mesh topology...")
+                trimesh.repair.fill_holes(mesh)
+                trimesh.repair.fix_normals(mesh)
+                st.session_state.analysis["mesh_info"]["is_watertight"] = mesh.is_watertight
+                if mesh.is_watertight:
+                    st.session_state.analysis["mesh_info"]["volume_mm3"] = float(mesh.volume)
+                st.success("✅ Part successfully converted to watertight manifold.")
+    st.session_state.agent_commands = []
 
-    with col_3d:
-        st.markdown("### 🔬 3D Mesh Viewer")
-        
-        view_opts = ["Raw Mesh"]
-        if "saliency_maps" in result:
-            view_opts.extend([f"Saliency: {k.replace('_', ' ').title()}" for k in result["saliency_maps"].keys()])
+
+tab1, tab2, tab3 = st.tabs(["📊 DFM Audit", "💰 Manufacturing & Costs", "🧪 Architecture Comparison"])
+
+# ═ TAB 1: DFM AUDIT ══════════════════════════════════════════════════════════
+with tab1:
+    if st.session_state.analysis:
+        res = st.session_state.analysis
+        mesh_info = res["mesh_info"]
+        constraints = res["constraints"]
+
+        col_mesh, col_data = st.columns([3, 2], gap="large")
+
+        with col_mesh:
+            st.markdown("### 🧩 3D Geometry Analysis")
             
-        view_mode = st.selectbox("View Mode", view_opts, index=0)
-        
-        intensity = None
-        if view_mode != "Raw Mesh" and "saliency_maps" in result:
-            # Reconstruct original key
-            raw_key = next(k for k in result["saliency_maps"].keys() if f"Saliency: {k.replace('_', ' ').title()}" == view_mode)
-            intensity = result["saliency_maps"][raw_key]
+            # Feature map selector
+            map_opts = ["Geometric Neutral"]
+            if "saliency_maps" in res:
+                map_opts.extend([
+                    f"D-Net Saliency: {k.replace('_', ' ').title()}" 
+                    for k in res["saliency_maps"].keys() 
+                    if k != "contour_count"
+                ])
             
-        fig = render_3d_mesh(result["raw_mesh"], intensity=intensity)
-        st.plotly_chart(fig, width="stretch")
+            view_mode = st.selectbox("Render Mode", map_opts, index=0)
 
-    with col_metrics:
-        st.markdown("### 📊 DFM Metrics")
+            intensity = None
+            if "Saliency" in view_mode:
+                key = next(k for k in res["saliency_maps"].keys() if k.replace('_', ' ').title() in view_mode)
+                intensity = res["saliency_maps"][key]
 
-        # Volume prediction
-        st.markdown(metric_card(
-            "Predicted Volume",
-            f"{result['predicted_volume_mm3']:,.1f} mm³"
-        ), unsafe_allow_html=True)
+            fig = render_3d_mesh(res["raw_mesh"], intensity=intensity)
+            st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
 
-        # Mesh stats row
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(metric_card("Vertices", f"{mesh_info['vertices']:,}"), unsafe_allow_html=True)
-            sa = mesh_info.get('surface_area_mm2')
-            st.markdown(metric_card("Surface Area", f"{sa:,.1f} mm²" if sa else "N/A"), unsafe_allow_html=True)
-        with c2:
-            st.markdown(metric_card("Faces", f"{mesh_info['faces']:,}"), unsafe_allow_html=True)
-            bb = mesh_info.get('bounding_box_mm', [0, 0, 0])
-            st.markdown(metric_card("Bounding Box", f"{bb[0]:.1f}×{bb[1]:.1f}×{bb[2]:.1f}"), unsafe_allow_html=True)
-
-        st.markdown(metric_card(
-            "Watertight",
-            "✅ Yes" if mesh_info.get("is_watertight") else "⚠️ No"
-        ), unsafe_allow_html=True)
-
-        # Constraint checks
-        st.markdown("#### Constraint Checks")
-        badges_html = ""
-        for name, info in constraints.items():
-            badges_html += constraint_badge(name, info)
-        st.markdown(f'<div style="background:#0e1117; border:1px solid #2980b9; '
-                    f'border-radius:12px; padding:10px 14px;">{badges_html}</div>',
-                    unsafe_allow_html=True)
-
-    # ── Chat section ─────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("### 💬 DFM Agent Chat")
-    st.markdown("*Ask questions about the part's manufacturability, orientation, material selection, or design improvements.*")
-
-    def render_orientations_UI(orientations_data):
-        if not orientations_data:
-            return
-        st.markdown("#### 🔄 Recommended Optimised Orientations")
-        cols = st.columns(3)
-        import copy
-        import trimesh
-        import plotly.graph_objects as go
-        
-        for i, o_data in enumerate(orientations_data):
-            r_mesh = result["raw_mesh"].copy()
-            euler = o_data['euler']
+        with col_data:
+            st.markdown("### 🔢 Geometric Predictions")
             
-            # Apply rotation
-            rot_matrix = trimesh.transformations.euler_matrix(
-                np.radians(euler[0]), np.radians(euler[1]), np.radians(euler[2])
-            )
-            r_mesh.apply_transform(rot_matrix)
+            st.markdown(metric_card("Predicted Build Volume", f"{res['predicted_volume_mm3']:,.1f} mm³"), unsafe_allow_html=True)
             
-            with cols[i]:
-                st.markdown(f"**{o_data['name']}**")
-                o_fig = render_3d_mesh(r_mesh)
-                o_fig.update_layout(height=280)
-                st.plotly_chart(o_fig, width="stretch")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(metric_card("Vertices", f"{mesh_info['vertices']:,}"), unsafe_allow_html=True)
+                sa = mesh_info.get('surface_area_mm2')
+                st.markdown(metric_card("Surface Area", f"{sa:,.0f} mm²" if sa else "N/A"), unsafe_allow_html=True)
+            with c2:
+                st.markdown(metric_card("Faces", f"{mesh_info['faces']:,}"), unsafe_allow_html=True)
+                bb = mesh_info.get('bounding_box_mm', [0, 0, 0])
+                st.markdown(metric_card("Max Extent", f"{max(bb):.1f} mm"), unsafe_allow_html=True)
+            
+            st.markdown("#### ⚖️ Constraint Compliance")
+            badges_html = ""
+            for name, info in constraints.items():
+                badges_html += constraint_row(name, info)
+            st.markdown(f'<div class="constraint-panel">{badges_html}</div>', unsafe_allow_html=True)
 
-    # Display chat history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg.get("orientations_data"):
-                render_orientations_UI(msg["orientations_data"])
-
-    # Chat input
-    if prompt := st.chat_input("e.g. Will this part warp during printing?"):
-        # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Get agent response
-        agent = st.session_state.agent
-        if agent is None:
-            reply = f"⚠️ Agent unavailable: {st.session_state.get('agent_error', 'Unknown error')}"
-        else:
-            with st.spinner("Thinking…"):
-                reply = agent.chat(st.session_state.messages, st.session_state.analysis)
-
-        # Capture recommended orientations if the agent generated them
-        orientations_data = None
-        if 'recommended_orientations' in st.session_state:
-            orientations_data = st.session_state['recommended_orientations']
-            del st.session_state['recommended_orientations']
-
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": reply, 
-            "orientations_data": orientations_data
-        })
+        # Chat
+        st.divider()
+        st.markdown("### 💬 DFM Agent Consultation")
         
-        with st.chat_message("assistant"):
-            st.markdown(reply)
-            if orientations_data:
-                render_orientations_UI(orientations_data)
+        def render_agent_orientations(data):
+            if not data: return
+            st.markdown("#### Recommended Orientations (Generated by Agent)")
+            cols = st.columns(3)
+            import trimesh as _trimesh
+            for i, o in enumerate(data):
+                m = res["raw_mesh"].copy()
+                rot = _trimesh.transformations.euler_matrix(np.radians(o['euler'][0]), np.radians(o['euler'][1]), np.radians(o['euler'][2]))
+                m.apply_transform(rot)
+                with cols[i]:
+                    st.markdown(f"<p style='text-align:center; font-weight:600;'>{o['name']}</p>", unsafe_allow_html=True)
+                    ofig = render_3d_mesh(m)
+                    ofig.update_layout(height=180)
+                    st.plotly_chart(ofig, width="stretch", config={'displayModeBar': False})
+
+        # Scrollable chat history container — keeps input pinned below
+        chat_container = st.container(height=420)
+        with chat_container:
+            for m in st.session_state.messages:
+                with st.chat_message(m["role"]):
+                    st.markdown(m["content"])
+                    if m.get("orientations_data"): render_agent_orientations(m["orientations_data"])
+
+        # Input box — always renders below the container
+        prompt = st.chat_input("Ask about print orientation, material choice, or cost...")
+        if prompt:
+            st.session_state.messages.append({"role": "user", "content": prompt})
+
+            with chat_container:
+                st.chat_message("user").markdown(prompt)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Agent analyzing requirements..."):
+                        reply = st.session_state.agent.chat(st.session_state.messages, res)
+                        orientations = None
+                        if 'recommended_orientations' in st.session_state:
+                            orientations = st.session_state['recommended_orientations']
+                            del st.session_state['recommended_orientations']
+
+                        st.markdown(reply)
+                        if orientations: render_agent_orientations(orientations)
+                        st.session_state.messages.append({"role": "assistant", "content": reply, "orientations_data": orientations})
+
+            if "agent_commands" in st.session_state and st.session_state.agent_commands:
+                st.rerun()
+
+
+# ═ TAB 2: MANUFACTURING & COSTS ══════════════════════════════════════════════
+with tab2:
+    st.markdown("### 💰 Production Estimator")
+    if not st.session_state.analysis:
+        st.info("Upload geometry to generate cost estimates.")
+    else:
+        v = st.session_state.analysis.get("predicted_volume_mm3", 0.0)
+        
+        with st.container(border=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                mat = st.selectbox("Build Material", ["PLA", "ABS", "PETG", "TPU", "NYLON", "PC"])
+                m_data = {"PLA": (1.24, 1500), "ABS": (1.04, 1600), "PETG": (1.27, 1800), "TPU": (1.21, 2500), "NYLON": (1.14, 4000), "PC": (1.20, 3500)}
+                density, base_inr = m_data[mat]
+            with c2:
+                inr_kg = st.number_input("Filament Cost (₹/kg)", value=float(base_inr))
+            with c3:
+                margin = st.slider("Service Margin (%)", 0, 100, 20)
+            
+            weight = (v / 1000.0) * density
+            raw_cost = (weight / 1000.0) * inr_kg
+            total_cost = raw_cost * (1 + margin/100)
+            
+            st.divider()
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1: st.metric("Predicted Weight", f"{weight:.1f} g")
+            with mc2: st.metric("Raw Material Cost", f"₹{raw_cost:.2f}")
+            with mc3: st.metric("Total Estimate (incl. Margin)", f"₹{total_cost:.2f}", delta=f"₹{total_cost-raw_cost:.1f} margin")
+
+        st.info("💡 Pro-Tip: Ask the DFM Agent to generate a **Full Manufacturing Report** including slicing parameters for this specific part.")
+
+
+# ═ TAB 3: ARCHITECTURE COMPARISON ════════ (STATIC BENCHMARKS) ═══════════════
+with tab3:
+    st.markdown("### 🧪 Architecture Benchmark Highlights")
+    st.markdown("Comparison of **Geometric Deep Learning** models trained on the DFM dataset.")
+    
+    render_comp_dashboard()
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("#### 📈 Global Architecture Performance Sumary")
+    render_summary_cards()

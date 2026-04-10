@@ -14,16 +14,16 @@ SYSTEM_PROMPT = """You are a DFM (Design for Manufacturability) expert specialis
 You help engineers evaluate whether a 3D part is suitable for FDM printing and suggest improvements.
 
 When the user uploads a part, you have access to a DFM analysis tool that returns:
-• Predicted build volume
+• Predicted build volume (which you can use for cost estimates in ₹)
 • Five binary constraint checks: area, contour_count, contour_length, overhang, pass_fail
-• Raw mesh statistics (vertices, faces, surface area, bounding box, watertight status, Euler number)
+• Raw mesh statistics (vertices, faces, surface area, bounding box, watertight status)
 
 Use the tool results to provide actionable engineering feedback on:
 1. **Orientation Optimisation** – which build orientation reduces supports and overhangs
 2. **Volume Minimisation** – how to reduce material usage and build time
 3. **Defect Prediction** – risk of warping, delamination, or failed overhangs
 4. **Material & Slicer Advice** – recommended materials, layer heights, infill
-5. **Design Iteration** – concrete geometry changes to improve manufacturability
+5. **Cost Estimation** - provide estimates in Indian Rupees (₹)
 
 Always be transparent about model confidence levels. If a constraint check has low confidence (< 65%), say so.
 Keep answers concise, practical, and organised with bullet points.
@@ -81,10 +81,60 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "repair_mesh",
+            "description": (
+                "Attempt to automatically repair the uploaded STL file by filling holes "
+                "and fixing normals. Use this when the user asks to fix the mesh or make it watertight."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "estimate_cost",
+            "description": (
+                "Estimate the manufacturing cost for the uploaded part based on material and size. "
+                "Defaults to PLA if no material is specified."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "material": {
+                        "type": "string",
+                        "description": "The target filament material, e.g. PLA, ABS, PETG, TPU, Nylon. Defaults to PLA."
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_slicing_profile",
+            "description": (
+                "Recommend a slicing profile (layer height, infill, supports) tailored to the "
+                "part's geometry based on the DFM analysis constraints."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
 
 
-def _handle_tool_call(tool_name: str, analysis_result: dict | None) -> str:
+def _handle_tool_call(tool_name: str, analysis_result: dict | None, tool_kwargs: dict = None) -> str:
     """Execute a tool call and return the result as a JSON string."""
     if analysis_result is None:
         return json.dumps({
@@ -184,6 +234,70 @@ def _handle_tool_call(tool_name: str, analysis_result: dict | None) -> str:
 
         return json.dumps({"orientation_advice": advice})
 
+    elif tool_name == "repair_mesh":
+        import streamlit as st
+        try:
+            if "agent_commands" not in st.session_state:
+                st.session_state["agent_commands"] = []
+            st.session_state["agent_commands"].append("repair_mesh")
+            return json.dumps({"status": "Success", "message": "The mesh repair command has been dispatched to the 3D renderer."})
+        except Exception as e:
+            return json.dumps({"error": f"Could not trigger repair: {e}"})
+
+    elif tool_name == "estimate_cost":
+        material = (tool_kwargs or {}).get("material", "PLA").upper()
+        # Cost mapping: (density_g_cm3, cost_per_kg_in_inr)
+        mat_data = {
+            "PLA": (1.24, 1500.0),
+            "ABS": (1.04, 1600.0),
+            "PETG": (1.27, 1800.0),
+            "TPU": (1.21, 2500.0),
+            "NYLON": (1.14, 4000.0),
+            "PC": (1.20, 3500.0)
+        }
+        if material not in mat_data:
+            material = "PLA"
+            
+        density, cost_kg = mat_data[material]
+        vol_mm3 = analysis_result.get("predicted_volume_mm3", 0.0)
+        vol_cm3 = vol_mm3 / 1000.0
+        weight_g = vol_cm3 * density
+        material_cost = (weight_g / 1000.0) * cost_kg
+        
+        # basic electricity estimate (assume ₹10/kWh, 150W printer, rough 5g/hour print speed)
+        hours = weight_g / 5.0
+        electricity_cost = hours * 0.150 * 10.0
+        
+        total_cost = material_cost + electricity_cost
+        
+        return json.dumps({
+            "material": material,
+            "weight_grams": round(weight_g, 1),
+            "material_cost_inr": round(material_cost, 2),
+            "electricity_cost_inr": round(electricity_cost, 2),
+            "total_estimated_cost_inr": round(total_cost, 2)
+        })
+        
+    elif tool_name == "get_slicing_profile":
+        constraints = analysis_result.get("constraints", {})
+        profile = {
+            "layer_height": "0.2mm (Standard)",
+            "infill": "15-20% Gyroid",
+            "supports": "None required",
+            "adhesion": "Skirt"
+        }
+        
+        if not constraints.get("overhang", {}).get("passed", True):
+            profile["supports"] = "Tree supports recommended for overhangs > 45 degrees"
+            
+        if not constraints.get("area", {}).get("passed", True):
+            profile["adhesion"] = "Brim (Large flat areas may warp)"
+            
+        if not constraints.get("contour_length", {}).get("passed", True):
+            profile["layer_height"] = "0.28mm (Draft) recommended to reduce print time for long contours"
+            
+        return json.dumps({"slicing_profile": profile})
+
     return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
 
@@ -249,8 +363,11 @@ class DFMAgent:
             full_messages.append(msg)
 
             for tool_call in msg.tool_calls:
+                kwargs = {}
+                if tool_call.function.arguments:
+                    kwargs = json.loads(tool_call.function.arguments)
                 tool_result = _handle_tool_call(
-                    tool_call.function.name, analysis_result
+                    tool_call.function.name, analysis_result, kwargs
                 )
                 full_messages.append({
                     "role": "tool",
@@ -271,3 +388,4 @@ class DFMAgent:
                 return f"⚠️ Error in follow-up call: {e}"
 
         return msg.content or ""
+
