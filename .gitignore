@@ -4,7 +4,11 @@ venv/
 .streamlit/
 .vscode/
 .idea/
-
+.DiffusionNet/
+.MeshCNN/
+.Node_level_DiffusionNet/
+.PointNet++/
+.GAT/
 # Python junk
 __pycache__/
 *.pyc
